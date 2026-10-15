@@ -123,6 +123,52 @@ def sync_agents() -> None:
 SYNCS = {"tmux": sync_tmux, "agents": sync_agents}
 
 
+def restore_backup(dst: Path, pattern: str) -> None:
+    # timestamp suffixes sort chronologically, so the last match is the newest
+    backups = sorted(dst.parent.glob(pattern))
+    if backups:
+        backups[-1].rename(dst)
+        print(f"restored  {backups[-1]} -> {dst}")
+
+
+def unlink_one(dst: Path, src: Path) -> None:
+    """Remove dst only if it is a symlink to src, then restore the newest backup."""
+    if not dst.is_symlink() or dst.readlink() != src:
+        print(f"skip      {dst} (not our link)" if dst.exists() or dst.is_symlink() else f"absent    {dst}")
+        return
+    dst.unlink()
+    print(f"removed   {dst}")
+    restore_backup(dst, f"{dst.name}.pre-ibpme-conf.*")
+
+
+def unsync_tmux() -> None:
+    src, dst = REPO / "tmux" / "tmux.conf", HOME / ".tmux.conf"
+    if not dst.is_file() or dst.is_symlink():
+        print(f"absent    {dst}" if not dst.exists() else f"skip      {dst} (not our copy)")
+    elif not filecmp.cmp(src, dst, shallow=False):
+        print(f"skip      {dst} (differs from the repo copy, not removing local edits)")
+    else:
+        dst.unlink()
+        print(f"removed   {dst}")
+        restore_backup(dst, f"{dst.name}.bak-*")
+
+
+def unsync_agents() -> None:
+    src = REPO / "agents" / "context" / "GLOBAL.md"
+    for dst in AGENT_CONTEXT_FILES.values():
+        unlink_one(dst, src)
+
+
+UNSYNCS = {"tmux": unsync_tmux, "agents": unsync_agents}
+
+
+def cmd_unsync(targets: list[str]) -> int:
+    for t in targets:
+        UNSYNCS[t]()
+        print()
+    return 0
+
+
 def cmd_sync(targets: list[str], run_checks: bool, explicit: bool) -> int:
     """General sync is best-effort: targets failing their checks only warn.
     An explicitly named target that fails its checks is an error."""
@@ -192,6 +238,23 @@ def cmd_self_install(parent: Path | None) -> int:
     return subprocess.run([sys.executable, str(dest / "ibpme-conf.py"), "self", "update"]).returncode
 
 
+def cmd_self_uninstall(remove_repo: bool, yes: bool) -> int:
+    if remove_repo:
+        if not (SCRIPT.is_file() and (REPO / ".git").is_dir()):
+            print("error: not running from a cloned repo, refusing to use -a", file=sys.stderr)
+            return 1
+        dirty = " (has uncommitted changes!)" if git("status", "--porcelain") else ""
+        if not yes and ask(f"Delete {REPO}{dirty}? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("aborted")
+            return 1
+    cmd_unsync(list(UNSYNCS))
+    unlink_one(HOME / ".local" / "bin" / "ibpme-conf", SCRIPT)
+    if remove_repo:
+        shutil.rmtree(REPO)
+        print(f"removed   {REPO}")
+    return 0
+
+
 def cmd_self_update(run_checks: bool, run_sync: bool) -> int:
     if subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"]).returncode != 0:
         print("error: git pull failed, not syncing", file=sys.stderr)
@@ -216,10 +279,15 @@ def main() -> int:
     sync = sub.add_parser("sync", help="copy repo configs over the ones on this machine")
     sync.add_argument("target", nargs="?", choices=list(SYNCS), help="limit to one config")
     sync.add_argument("--no-checks", action="store_true", help="skip the pre-sync check")
+    unsync = sub.add_parser("unsync", help="undo sync: remove what it created and restore backups")
+    unsync.add_argument("target", nargs="?", choices=list(UNSYNCS), help="limit to one config")
     self_cmd = sub.add_parser("self", help="utilities and metadata for this repo")
     self_sub = self_cmd.add_subparsers(dest="self_cmd", required=True)
     self_sub.add_parser("info", help="show repo path, remote, branch and commit")
     self_sub.add_parser("sync", help="symlink this script into ~/.local/bin")
+    uninstall = self_sub.add_parser("uninstall", help="unsync everything and remove the ~/.local/bin link")
+    uninstall.add_argument("-a", "--all", action="store_true", help="also delete this cloned repo (asks first)")
+    uninstall.add_argument("-y", "--yes", action="store_true", help="don't ask before deleting with -a")
     install = self_sub.add_parser("install", help="clone this repo, then self update (install + sync)")
     install.add_argument("--dir", type=Path, help="parent directory to clone into (skips the prompt)")
     update = self_sub.add_parser("update", help="git pull this repo, install it to ~/.local/bin, then sync")
@@ -232,6 +300,8 @@ def main() -> int:
             return cmd_check([args.target] if args.target else targets)
         case "sync":
             return cmd_sync([args.target] if args.target else list(SYNCS), not args.no_checks, bool(args.target))
+        case "unsync":
+            return cmd_unsync([args.target] if args.target else list(UNSYNCS))
         case "self":
             match args.self_cmd:
                 case "info":
@@ -240,6 +310,8 @@ def main() -> int:
                     return cmd_self_sync()
                 case "install":
                     return cmd_self_install(args.dir)
+                case "uninstall":
+                    return cmd_self_uninstall(args.all, args.yes)
                 case "update":
                     return cmd_self_update(not args.no_checks, not args.no_sync)
     return 0

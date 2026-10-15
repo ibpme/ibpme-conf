@@ -17,13 +17,17 @@ Add `--dir ~/src` to clone into `~/src/ibpme-conf` without the prompt.
 ```sh
 ./ibpme-conf.py check [tmux|zsh|agents]   # report installed tools and versions
 ./ibpme-conf.py sync [tmux|agents]        # check, then sync
+./ibpme-conf.py unsync [tmux|agents]      # undo sync, restoring backups
 ./ibpme-conf.py self info                 # repo path, remote, branch, commit, clean/dirty
 ./ibpme-conf.py self sync                 # symlink the script to ~/.local/bin/ibpme-conf
 ./ibpme-conf.py self install [--dir DIR]  # clone, then self update
+./ibpme-conf.py self uninstall [-a]      # unsync all, remove the bin link; -a also deletes this clone
 ./ibpme-conf.py self update               # git pull --ff-only, self sync, then sync
 ```
 
 `sync` runs `check` for each target first. With no target it is best-effort: a target that fails its checks is skipped with a warning. A named target that fails exits 1. Pass `--no-checks` to skip the checks. `self update` takes `--no-checks` too, plus `--no-sync` to skip the config sync (the install still runs).
+
+`unsync` only removes what `sync` created (links to this repo, or a `~/.tmux.conf` identical to the repo copy) and restores the newest backup. `self uninstall -a` asks before deleting the clone (`-y` skips the prompt).
 
 ## Targets
 
