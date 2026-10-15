@@ -29,8 +29,6 @@ EXTRAS: dict[str, tuple[str, Path]] = {
 }
 
 
-AGENTS = ("claude", "pi", "codex")
-
 VERSION_CMDS = {"tmux": ["tmux", "-V"], "zsh": ["zsh", "--version"]}
 
 
@@ -57,16 +55,30 @@ def check_tool(tool: str) -> bool:
 
 
 def check_agents() -> bool:
-    results = [
-        report(a, shutil.which(a), run([a, "--version"]).splitlines()[0] if shutil.which(a) else "")
-        for a in AGENTS
-    ]
+    results = []
+    for a in AGENT_CONTEXT_FILES:
+        path = shutil.which(a)
+        version = (run([a, "--version"]).splitlines() or [""])[0] if path else ""
+        results.append(report(a, path, version))
     return all(results)
 
 
 def cmd_check(targets: list[str]) -> int:
     results = [check_agents() if t == "agents" else check_tool(t) for t in targets]
     return 0 if all(results) else 1
+
+
+def backup(dst: Path) -> Path:
+    """Rename dst aside to a unique name; rename() would silently overwrite an existing backup."""
+    stamp = f"{datetime.now():%Y%m%dT%H%M%S%f}"
+    bak = dst.with_name(f"{dst.name}.pre-ibpme-conf.{stamp}")
+    n = 0
+    while bak.exists() or bak.is_symlink():
+        n += 1
+        bak = dst.with_name(f"{dst.name}.pre-ibpme-conf.{stamp}-{n}")
+    dst.rename(bak)
+    print(f"backup    {bak}")
+    return bak
 
 
 def copy_config(src: Path, dst: Path) -> None:
@@ -76,9 +88,7 @@ def copy_config(src: Path, dst: Path) -> None:
     if dst.is_symlink():
         dst.unlink()
     elif dst.exists():
-        bak = dst.with_name(f"{dst.name}.bak-{datetime.now():%Y%m%d%H%M%S}")
-        dst.rename(bak)
-        print(f"backup    {bak}")
+        backup(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
     print(f"copied    {src} -> {dst}")
@@ -91,9 +101,7 @@ def link_one(src: Path, dst: Path) -> None:
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() or dst.is_symlink():
-        bak = dst.with_name(f"{dst.name}.pre-ibpme-conf.{datetime.now():%Y%m%dT%H%M%S}")
-        dst.rename(bak)
-        print(f"backup    {bak}")
+        backup(dst)
     dst.symlink_to(src)
     print(f"linked    {dst} -> {src}")
 
@@ -123,12 +131,13 @@ def sync_agents() -> None:
 SYNCS = {"tmux": sync_tmux, "agents": sync_agents}
 
 
-def restore_backup(dst: Path, pattern: str) -> None:
-    # timestamp suffixes sort chronologically, so the last match is the newest
-    backups = sorted(dst.parent.glob(pattern))
+def restore_backup(dst: Path, *patterns: str) -> None:
+    # timestamp suffixes sort chronologically; the oldest backup is the user's original,
+    # later ones may just be superseded repo copies
+    backups = sorted(b for pat in patterns for b in dst.parent.glob(pat))
     if backups:
-        backups[-1].rename(dst)
-        print(f"restored  {backups[-1]} -> {dst}")
+        backups[0].rename(dst)
+        print(f"restored  {backups[0]} -> {dst}")
 
 
 def unlink_one(dst: Path, src: Path) -> None:
@@ -150,7 +159,7 @@ def unsync_tmux() -> None:
     else:
         dst.unlink()
         print(f"removed   {dst}")
-        restore_backup(dst, f"{dst.name}.bak-*")
+        restore_backup(dst, f"{dst.name}.pre-ibpme-conf.*", f"{dst.name}.bak-*")
 
 
 def unsync_agents() -> None:
@@ -170,11 +179,12 @@ def cmd_unsync(targets: list[str]) -> int:
 
 
 def cmd_sync(targets: list[str], run_checks: bool, explicit: bool) -> int:
-    """General sync is best-effort: targets failing their checks only warn.
+    """Only targets with required extras (EXTRAS) are gated; agents skip missing tools themselves.
+    General sync is best-effort: targets failing their checks only warn.
     An explicitly named target that fails its checks is an error."""
     blocked = 0
     for t in targets:
-        if run_checks and cmd_check([t]) != 0:
+        if run_checks and t in EXTRAS and cmd_check([t]) != 0:
             print(f"warning: skipping {t}, checks failed (use --no-checks to override)\n", file=sys.stderr)
             blocked += 1
             continue
@@ -183,8 +193,13 @@ def cmd_sync(targets: list[str], run_checks: bool, explicit: bool) -> int:
     return 1 if explicit and blocked else 0
 
 
-def git(*args: str) -> str:
-    return run(["git", "-C", str(REPO), *args])
+def git(*args: str) -> str | None:
+    """Stdout of a git command in REPO, or None if git failed."""
+    try:
+        r = subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
 
 
 def cmd_self_info() -> int:
@@ -192,9 +207,9 @@ def cmd_self_info() -> int:
     rows = {
         "path": str(REPO),
         "remote": git("remote", "get-url", "origin") or "none",
-        "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+        "branch": git("rev-parse", "--abbrev-ref", "HEAD") or "unknown",
         "commit": git("log", "-1", "--format=%h %ad %s", "--date=short") or "none",
-        "state": "dirty" if dirty else "clean",
+        "state": "unknown" if dirty is None else "dirty" if dirty else "clean",
     }
     for key, value in rows.items():
         print(f"{key:<8} {value}")
@@ -243,7 +258,14 @@ def cmd_self_uninstall(remove_repo: bool, yes: bool) -> int:
         if not (SCRIPT.is_file() and (REPO / ".git").is_dir()):
             print("error: not running from a cloned repo, refusing to use -a", file=sys.stderr)
             return 1
-        dirty = " (has uncommitted changes!)" if git("status", "--porcelain") else ""
+        if REPO == Path(REPO.anchor) or REPO == HOME or REPO in HOME.parents:
+            print(f"error: refusing to delete {REPO}", file=sys.stderr)
+            return 1
+        if git("remote", "get-url", "origin") != REPO_URL:
+            print(f"error: origin is not {REPO_URL}, refusing to use -a", file=sys.stderr)
+            return 1
+        status = git("status", "--porcelain")
+        dirty = " (uncommitted state unknown!)" if status is None else " (has uncommitted changes!)" if status else ""
         if not yes and ask(f"Delete {REPO}{dirty}? [y/N] ").strip().lower() not in ("y", "yes"):
             print("aborted")
             return 1
@@ -274,7 +296,7 @@ def main() -> int:
     check = sub.add_parser("check", help="check required tools are installed")
     targets = [*EXTRAS, "agents"]
     check.add_argument(
-        "target", nargs="?", choices=targets, help="limit to one (tmux: +tpm, zsh: +oh-my-zsh, agents: claude/pi/codex)"
+        "target", nargs="?", choices=targets, help="limit to one (tmux: +tpm, zsh: +oh-my-zsh, agents: every agent in AGENT_CONTEXT_FILES)"
     )
     sync = sub.add_parser("sync", help="copy repo configs over the ones on this machine")
     sync.add_argument("target", nargs="?", choices=list(SYNCS), help="limit to one config")
