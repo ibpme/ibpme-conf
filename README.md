@@ -7,9 +7,11 @@ Personal configs synced across machines. Entry point: `ibpme-conf.py` (Python â‰
 ```sh
 ./ibpme-conf.py check [tmux|zsh|agents]   # report installed tools and versions
 ./ibpme-conf.py sync [tmux|agents]        # check, then sync
+./ibpme-conf.py self info                 # repo path, remote, branch, commit, clean/dirty
+./ibpme-conf.py self update               # git pull --ff-only, then sync
 ```
 
-`sync` runs `check` for each target first. With no target it is best-effort: a target that fails its checks is skipped with a warning. A named target that fails exits 1. Pass `--no-checks` to skip the checks.
+`sync` runs `check` for each target first. With no target it is best-effort: a target that fails its checks is skipped with a warning. A named target that fails exits 1. Pass `--no-checks` to skip the checks. `self update` takes `--no-checks` too, plus `--no-sync` to only pull.
 
 ## Targets
 

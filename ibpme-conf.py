@@ -134,6 +134,35 @@ def cmd_sync(targets: list[str], run_checks: bool, explicit: bool) -> int:
     return 1 if explicit and blocked else 0
 
 
+def git(*args: str) -> str:
+    return run(["git", "-C", str(REPO), *args])
+
+
+def cmd_self_info() -> int:
+    dirty = git("status", "--porcelain")
+    rows = {
+        "path": str(REPO),
+        "remote": git("remote", "get-url", "origin") or "none",
+        "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+        "commit": git("log", "-1", "--format=%h %ad %s", "--date=short") or "none",
+        "state": "dirty" if dirty else "clean",
+    }
+    for key, value in rows.items():
+        print(f"{key:<8} {value}")
+    return 0
+
+
+def cmd_self_update(run_checks: bool, run_sync: bool) -> int:
+    if subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"]).returncode != 0:
+        print("error: git pull failed, not syncing", file=sys.stderr)
+        return 1
+    if not run_sync:
+        return 0
+    # re-run as a new process so a freshly pulled version of this script does the sync
+    cmd = [sys.executable, str(Path(__file__).resolve()), "sync"] + ([] if run_checks else ["--no-checks"])
+    return subprocess.run(cmd).returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -145,6 +174,12 @@ def main() -> int:
     sync = sub.add_parser("sync", help="copy repo configs over the ones on this machine")
     sync.add_argument("target", nargs="?", choices=list(SYNCS), help="limit to one config")
     sync.add_argument("--no-checks", action="store_true", help="skip the pre-sync check")
+    self_cmd = sub.add_parser("self", help="utilities and metadata for this repo")
+    self_sub = self_cmd.add_subparsers(dest="self_cmd", required=True)
+    self_sub.add_parser("info", help="show repo path, remote, branch and commit")
+    update = self_sub.add_parser("update", help="git pull this repo, then sync")
+    update.add_argument("--no-checks", action="store_true", help="skip the pre-sync check")
+    update.add_argument("--no-sync", action="store_true", help="only pull, don't sync")
     args = parser.parse_args()
 
     match args.cmd:
@@ -152,6 +187,12 @@ def main() -> int:
             return cmd_check([args.target] if args.target else targets)
         case "sync":
             return cmd_sync([args.target] if args.target else list(SYNCS), not args.no_checks, bool(args.target))
+        case "self":
+            match args.self_cmd:
+                case "info":
+                    return cmd_self_info()
+                case "update":
+                    return cmd_self_update(not args.no_checks, not args.no_sync)
     return 0
 
 
