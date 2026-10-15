@@ -152,15 +152,27 @@ def cmd_self_info() -> int:
     return 0
 
 
+def cmd_self_sync() -> int:
+    script = Path(__file__).resolve()
+    script.chmod(script.stat().st_mode | 0o111)
+    bin_dir = HOME / ".local" / "bin"
+    link_one(script, bin_dir / "ibpme-conf")
+    if str(bin_dir) not in os.environ.get("PATH", "").split(os.pathsep):
+        print(f"warning: {bin_dir} is not on PATH", file=sys.stderr)
+    return 0
+
+
 def cmd_self_update(run_checks: bool, run_sync: bool) -> int:
     if subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"]).returncode != 0:
         print("error: git pull failed, not syncing", file=sys.stderr)
         return 1
+    # re-run as new processes so a freshly pulled version of this script does the work
+    script = [sys.executable, str(Path(__file__).resolve())]
+    if subprocess.run([*script, "self", "sync"]).returncode != 0:
+        return 1
     if not run_sync:
         return 0
-    # re-run as a new process so a freshly pulled version of this script does the sync
-    cmd = [sys.executable, str(Path(__file__).resolve()), "sync"] + ([] if run_checks else ["--no-checks"])
-    return subprocess.run(cmd).returncode
+    return subprocess.run([*script, "sync", *([] if run_checks else ["--no-checks"])]).returncode
 
 
 def main() -> int:
@@ -177,7 +189,8 @@ def main() -> int:
     self_cmd = sub.add_parser("self", help="utilities and metadata for this repo")
     self_sub = self_cmd.add_subparsers(dest="self_cmd", required=True)
     self_sub.add_parser("info", help="show repo path, remote, branch and commit")
-    update = self_sub.add_parser("update", help="git pull this repo, then sync")
+    self_sub.add_parser("sync", help="symlink this script into ~/.local/bin")
+    update = self_sub.add_parser("update", help="git pull this repo, install it to ~/.local/bin, then sync")
     update.add_argument("--no-checks", action="store_true", help="skip the pre-sync check")
     update.add_argument("--no-sync", action="store_true", help="only pull, don't sync")
     args = parser.parse_args()
@@ -191,6 +204,8 @@ def main() -> int:
             match args.self_cmd:
                 case "info":
                     return cmd_self_info()
+                case "sync":
+                    return cmd_self_sync()
                 case "update":
                     return cmd_self_update(not args.no_checks, not args.no_sync)
     return 0
