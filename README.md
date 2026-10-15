@@ -34,7 +34,7 @@ Add `--dir ~/src` to clone into `~/src/ibpme-conf` without the prompt.
 | Target | Requires | Sync method |
 |---|---|---|
 | `tmux` | tmux, [tpm](https://github.com/tmux-plugins/tpm) | copies `tmux/tmux.conf` to `~/.tmux.conf` |
-| `agents` | claude, pi, codex | symlinks `agents/context/GLOBAL.md` to each installed agent's global instructions file |
+| `agents` | claude, pi, codex, jq | symlinks `agents/context/GLOBAL.md` to each installed agent's global instructions file; for claude, also symlinks `agents/claude/statusline.sh` to `~/.claude/statusline-command.sh` (`settings.json` is never modified; sync warns if its `statusLine` doesn't reference `statusline-command.sh`) |
 
 Existing files are never overwritten: they are renamed aside (`.bak-<timestamp>` for copies, `.pre-ibpme-conf.<timestamp>` for symlinks).
 
@@ -46,6 +46,7 @@ After syncing tmux, reload it and press `prefix + I` to install plugins.
 ibpme-conf.py   entry point
 tmux/           tmux.conf (OS differences handled inside via if-shell)
 agents/context/ GLOBAL.md shared by all coding agents
+agents/claude/  statusline.sh, the Claude Code status line (macOS and Linux)
 nvim/           (empty)
 scripts/        standalone helper scripts
 ```

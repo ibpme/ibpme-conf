@@ -8,6 +8,7 @@
 
 import argparse
 import filecmp
+import json
 import os
 import shutil
 import subprocess
@@ -60,6 +61,8 @@ def check_agents() -> bool:
         path = shutil.which(a)
         version = (run([a, "--version"]).splitlines() or [""])[0] if path else ""
         results.append(report(a, path, version))
+    # the claude status line parses its payload with jq
+    results.append(report("jq", shutil.which("jq"), run(["jq", "--version"])))
     return all(results)
 
 
@@ -115,6 +118,39 @@ AGENT_CONTEXT_FILES: dict[str, Path] = {
 }
 
 
+CLAUDE_DIR = HOME / ".claude"
+STATUSLINE_SRC = REPO / "agents" / "claude" / "statusline.sh"
+STATUSLINE_DST = CLAUDE_DIR / "statusline-command.sh"
+CLAUDE_SETTINGS = CLAUDE_DIR / "settings.json"
+
+
+def statusline_configured() -> bool:
+    """True if settings.json has a statusLine command that mentions our script's name."""
+    try:
+        command = json.loads(CLAUDE_SETTINGS.read_text()).get("statusLine", {}).get("command", "")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(command, str) and STATUSLINE_DST.name in command
+
+
+def sync_claude_statusline() -> None:
+    if not shutil.which("claude"):
+        print("skip      claude statusline (not installed)")
+        return
+    STATUSLINE_SRC.chmod(STATUSLINE_SRC.stat().st_mode | 0o111)
+    link_one(STATUSLINE_SRC, STATUSLINE_DST)
+    if not statusline_configured():
+        print(
+            f"warning: statusLine in {CLAUDE_SETTINGS} does not reference {STATUSLINE_DST.name}, "
+            f'add: "statusLine": {{"type": "command", "command": "bash {STATUSLINE_DST}"}}',
+            file=sys.stderr,
+        )
+
+
+def unsync_claude_statusline() -> None:
+    unlink_one(STATUSLINE_DST, STATUSLINE_SRC)
+
+
 def sync_tmux() -> None:
     copy_config(REPO / "tmux" / "tmux.conf", HOME / ".tmux.conf")
 
@@ -126,6 +162,7 @@ def sync_agents() -> None:
             print(f"skip      {agent} (not installed)")
             continue
         link_one(src, dst)
+    sync_claude_statusline()
 
 
 SYNCS = {"tmux": sync_tmux, "agents": sync_agents}
@@ -150,8 +187,8 @@ def unlink_one(dst: Path, src: Path) -> None:
     restore_backup(dst, f"{dst.name}.pre-ibpme-conf.*")
 
 
-def unsync_tmux() -> None:
-    src, dst = REPO / "tmux" / "tmux.conf", HOME / ".tmux.conf"
+def unsync_copy(src: Path, dst: Path) -> None:
+    """Remove dst only if it is a plain file identical to src, then restore the oldest backup."""
     if not dst.is_file() or dst.is_symlink():
         print(f"absent    {dst}" if not dst.exists() else f"skip      {dst} (not our copy)")
     elif not filecmp.cmp(src, dst, shallow=False):
@@ -162,10 +199,15 @@ def unsync_tmux() -> None:
         restore_backup(dst, f"{dst.name}.pre-ibpme-conf.*", f"{dst.name}.bak-*")
 
 
+def unsync_tmux() -> None:
+    unsync_copy(REPO / "tmux" / "tmux.conf", HOME / ".tmux.conf")
+
+
 def unsync_agents() -> None:
     src = REPO / "agents" / "context" / "GLOBAL.md"
     for dst in AGENT_CONTEXT_FILES.values():
         unlink_one(dst, src)
+    unsync_claude_statusline()
 
 
 UNSYNCS = {"tmux": unsync_tmux, "agents": unsync_agents}
