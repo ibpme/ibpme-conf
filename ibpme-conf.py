@@ -15,7 +15,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
+# __file__ is undefined when piped via stdin (curl ... | uv run -); only `self install` works then
+SCRIPT = Path(__file__).resolve() if "__file__" in globals() else Path.cwd() / "ibpme-conf.py"
+REPO = SCRIPT.parent
+REPO_URL = "https://github.com/ibpme/ibpme-conf.git"
 
 HOME = Path.home()
 
@@ -153,7 +156,7 @@ def cmd_self_info() -> int:
 
 
 def cmd_self_sync() -> int:
-    script = Path(__file__).resolve()
+    script = SCRIPT
     script.chmod(script.stat().st_mode | 0o111)
     bin_dir = HOME / ".local" / "bin"
     link_one(script, bin_dir / "ibpme-conf")
@@ -162,12 +165,39 @@ def cmd_self_sync() -> int:
     return 0
 
 
+def ask(question: str) -> str:
+    """Prompt on the terminal even when stdin is a pipe (curl ... | uv run -)."""
+    try:
+        with open("/dev/tty", "r+") as tty:
+            tty.write(question)
+            tty.flush()
+            return tty.readline()
+    except OSError:
+        return ""
+
+
+def cmd_self_install(parent: Path | None) -> int:
+    if parent is None:
+        parent = Path.cwd()
+        answer = ask(f"Clone ibpme-conf into {parent / 'ibpme-conf'}? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("aborted")
+            return 1
+    dest = parent.expanduser().resolve() / "ibpme-conf"
+    if dest.exists():
+        print(f"error: {dest} already exists", file=sys.stderr)
+        return 1
+    if subprocess.run(["git", "clone", REPO_URL, str(dest)]).returncode != 0:
+        return 1
+    return subprocess.run([sys.executable, str(dest / "ibpme-conf.py"), "self", "update"]).returncode
+
+
 def cmd_self_update(run_checks: bool, run_sync: bool) -> int:
     if subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"]).returncode != 0:
         print("error: git pull failed, not syncing", file=sys.stderr)
         return 1
     # re-run as new processes so a freshly pulled version of this script does the work
-    script = [sys.executable, str(Path(__file__).resolve())]
+    script = [sys.executable, str(SCRIPT)]
     if subprocess.run([*script, "self", "sync"]).returncode != 0:
         return 1
     if not run_sync:
@@ -190,6 +220,8 @@ def main() -> int:
     self_sub = self_cmd.add_subparsers(dest="self_cmd", required=True)
     self_sub.add_parser("info", help="show repo path, remote, branch and commit")
     self_sub.add_parser("sync", help="symlink this script into ~/.local/bin")
+    install = self_sub.add_parser("install", help="clone this repo, then self update (install + sync)")
+    install.add_argument("--dir", type=Path, help="parent directory to clone into (skips the prompt)")
     update = self_sub.add_parser("update", help="git pull this repo, install it to ~/.local/bin, then sync")
     update.add_argument("--no-checks", action="store_true", help="skip the pre-sync check")
     update.add_argument("--no-sync", action="store_true", help="only pull, don't sync")
@@ -206,6 +238,8 @@ def main() -> int:
                     return cmd_self_info()
                 case "sync":
                     return cmd_self_sync()
+                case "install":
+                    return cmd_self_install(args.dir)
                 case "update":
                     return cmd_self_update(not args.no_checks, not args.no_sync)
     return 0

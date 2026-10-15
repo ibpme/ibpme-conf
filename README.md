@@ -2,6 +2,16 @@
 
 Personal configs synced across machines. Entry point: `ibpme-conf.py` (Python â‰¥3.12, stdlib only, run via `uv`).
 
+## Quick install
+
+Requires [`uv`](https://docs.astral.sh/uv/) and `git`. Clones into `./ibpme-conf` (asks first), installs `ibpme-conf` to `~/.local/bin`, then syncs:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ibpme/ibpme-conf/main/ibpme-conf.py | uv run --script - self install
+```
+
+Add `--dir ~/src` to clone into `~/src/ibpme-conf` without the prompt.
+
 ## Usage
 
 ```sh
@@ -9,6 +19,7 @@ Personal configs synced across machines. Entry point: `ibpme-conf.py` (Python â‰
 ./ibpme-conf.py sync [tmux|agents]        # check, then sync
 ./ibpme-conf.py self info                 # repo path, remote, branch, commit, clean/dirty
 ./ibpme-conf.py self sync                 # symlink the script to ~/.local/bin/ibpme-conf
+./ibpme-conf.py self install [--dir DIR]  # clone, then self update
 ./ibpme-conf.py self update               # git pull --ff-only, self sync, then sync
 ```
 
