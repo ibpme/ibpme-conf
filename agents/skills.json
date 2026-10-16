@@ -1,0 +1,7 @@
+{
+  "sources": [
+    {"source": "ibpme/ibpme-agents-lab", "skills": ["*"]},
+    {"source": "obra/superpowers", "skills": ["test-driven-development"]},
+    {"source": "mattpocock/skills", "skills": ["tdd", "writing-for-agents", "codebase-design"]}
+  ]
+}

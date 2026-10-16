@@ -15,9 +15,9 @@ Add `--dir ~/src` to clone into `~/src/ibpme-conf` without the prompt.
 ## Usage
 
 ```sh
-./ibpme-conf.py check [tmux|zsh|agents]   # report installed tools and versions
-./ibpme-conf.py sync [tmux|agents]        # check, then sync
-./ibpme-conf.py unsync [tmux|agents]      # undo sync, restoring backups
+./ibpme-conf.py check [tmux|zsh|agents|skills]   # report installed tools and versions
+./ibpme-conf.py sync [tmux|agents|skills]        # check, then sync
+./ibpme-conf.py unsync [tmux|agents|skills]      # undo sync, restoring backups
 ./ibpme-conf.py self info                 # repo path, remote, branch, commit, clean/dirty
 ./ibpme-conf.py self sync                 # symlink the script to ~/.local/bin/ibpme-conf
 ./ibpme-conf.py self install [--dir DIR]  # clone, then self update
@@ -35,8 +35,17 @@ Add `--dir ~/src` to clone into `~/src/ibpme-conf` without the prompt.
 |---|---|---|
 | `tmux` | tmux, [tpm](https://github.com/tmux-plugins/tpm) | copies `tmux/tmux.conf` to `~/.tmux.conf` |
 | `agents` | claude, pi, codex, jq | symlinks `agents/context/GLOBAL.md` to each installed agent's global instructions file; for claude, also symlinks `agents/claude/statusline.sh` to `~/.claude/statusline-command.sh` (`settings.json` is never modified; sync warns if its `statusLine` doesn't reference `statusline-command.sh`) |
+| `skills` | npx, claude (optional) | `npx skills add -g` for each source in `agents/skills.json`, into `~/.agents/skills` and `~/.claude/skills` |
 
 Existing files are never overwritten: they are renamed aside (`.bak-<timestamp>` for copies, `.pre-ibpme-conf.<timestamp>` for symlinks).
+
+### Skills manifest
+
+`agents/skills.json` lists GitHub `owner/repo` sources and their skills. `"*"` installs every skill a source ships:
+
+```json
+{"sources": [{"source": "ibpme/ibpme-agents-lab", "skills": ["*"]}]}
+```
 
 After syncing tmux, reload it and press `prefix + I` to install plugins.
 
@@ -47,6 +56,7 @@ ibpme-conf.py   entry point
 tmux/           tmux.conf (OS differences handled inside via if-shell)
 agents/context/ GLOBAL.md shared by all coding agents
 agents/claude/  statusline.sh, the Claude Code status line (macOS and Linux)
+agents/skills.json  skill sources to install (see Skills manifest)
 nvim/           (empty)
 scripts/        standalone helper scripts
 ```

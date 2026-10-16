@@ -66,8 +66,15 @@ def check_agents() -> bool:
     return all(results)
 
 
+def check_skills() -> bool:
+    return report("npx", shutil.which("npx"), run(["npx", "--version"]))
+
+
+CHECKS = {"agents": check_agents, "skills": check_skills}
+
+
 def cmd_check(targets: list[str]) -> int:
-    results = [check_agents() if t == "agents" else check_tool(t) for t in targets]
+    results = [CHECKS[t]() if t in CHECKS else check_tool(t) for t in targets]
     return 0 if all(results) else 1
 
 
@@ -165,7 +172,51 @@ def sync_agents() -> None:
     sync_claude_statusline()
 
 
-SYNCS = {"tmux": sync_tmux, "agents": sync_agents}
+SKILLS_MANIFEST = REPO / "agents" / "skills.json"
+SKILLS_PKG = "skills@1.7.2"
+# codex stands in for every universal agent: they all read ~/.agents/skills, which the CLI writes
+UNIVERSAL_SKILL_AGENT = "codex"
+CLAUDE_SKILL_AGENT = "claude-code"
+
+
+def load_skill_manifest() -> dict[str, list[str]] | None:
+    """Map each third-party source to the skill names the manifest asks for."""
+    try:
+        data = json.loads(SKILLS_MANIFEST.read_text())
+        return {entry["source"]: list(entry["skills"]) for entry in data["sources"]}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"error: cannot read {SKILLS_MANIFEST}: {e}", file=sys.stderr)
+        return None
+
+
+def skills_cli(*args: str) -> bool:
+    """Run the skills CLI from HOME so its project-level lock file never lands in this repo."""
+    return subprocess.run(["npx", "-y", SKILLS_PKG, *args], cwd=HOME, stdin=subprocess.DEVNULL).returncode == 0
+
+
+def skill_agent_ids() -> list[str]:
+    return [UNIVERSAL_SKILL_AGENT, *([CLAUDE_SKILL_AGENT] if shutil.which("claude") else [])]
+
+
+def sync_skills() -> bool:
+    manifest = load_skill_manifest()
+    if manifest is None:
+        return False
+    if not shutil.which("npx"):
+        print("skip      skills (npx not installed)")
+        return True
+    ok = True
+    agents = skill_agent_ids()
+    for source, names in manifest.items():
+        if skills_cli("add", source, "-g", "-a", *agents, "-s", *names, "-y"):
+            print(f"installed {source}: {' '.join(names)}")
+        else:
+            print(f"error: failed to install from {source}", file=sys.stderr)
+            ok = False
+    return ok
+
+
+SYNCS = {"tmux": sync_tmux, "agents": sync_agents, "skills": sync_skills}
 
 
 def restore_backup(dst: Path, *patterns: str) -> None:
@@ -210,7 +261,31 @@ def unsync_agents() -> None:
     unsync_claude_statusline()
 
 
-UNSYNCS = {"tmux": unsync_tmux, "agents": unsync_agents}
+def installed_skill_names(source: str) -> list[str]:
+    """Names the CLI has installed from source, read from its global lock file."""
+    try:
+        skills = json.loads((HOME / ".agents" / ".skill-lock.json").read_text())["skills"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return [name for name, entry in skills.items() if entry.get("source") == source]
+
+
+def unsync_skills() -> None:
+    manifest = load_skill_manifest()
+    if manifest is None:
+        return
+    if not shutil.which("npx"):
+        print("skip      skills (npx not installed)")
+        return
+    names = []
+    for source, wanted in manifest.items():
+        # "*" means every skill the source ships, so ask the lock rather than remove by wildcard
+        names += installed_skill_names(source) if wanted == ["*"] else wanted
+    if names:
+        skills_cli("remove", "-g", "-a", UNIVERSAL_SKILL_AGENT, CLAUDE_SKILL_AGENT, "-s", *names, "-y")
+
+
+UNSYNCS = {"tmux": unsync_tmux, "agents": unsync_agents, "skills": unsync_skills}
 
 
 def cmd_unsync(targets: list[str]) -> int:
@@ -224,15 +299,16 @@ def cmd_sync(targets: list[str], run_checks: bool, explicit: bool) -> int:
     """Only targets with required extras (EXTRAS) are gated; agents skip missing tools themselves.
     General sync is best-effort: targets failing their checks only warn.
     An explicitly named target that fails its checks is an error."""
-    blocked = 0
+    blocked = failed = 0
     for t in targets:
         if run_checks and t in EXTRAS and cmd_check([t]) != 0:
             print(f"warning: skipping {t}, checks failed (use --no-checks to override)\n", file=sys.stderr)
             blocked += 1
             continue
-        SYNCS[t]()
+        if SYNCS[t]() is False:
+            failed += 1
         print()
-    return 1 if explicit and blocked else 0
+    return 1 if explicit and (blocked or failed) else 0
 
 
 def git(*args: str) -> str | None:
@@ -336,9 +412,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     check = sub.add_parser("check", help="check required tools are installed")
-    targets = [*EXTRAS, "agents"]
+    targets = [*EXTRAS, *CHECKS]
     check.add_argument(
-        "target", nargs="?", choices=targets, help="limit to one (tmux: +tpm, zsh: +oh-my-zsh, agents: every agent in AGENT_CONTEXT_FILES)"
+        "target",
+        nargs="?",
+        choices=targets,
+        help="limit to one (tmux: +tpm, zsh: +oh-my-zsh, agents: every agent in AGENT_CONTEXT_FILES, skills: npx)",
     )
     sync = sub.add_parser("sync", help="copy repo configs over the ones on this machine")
     sync.add_argument("target", nargs="?", choices=list(SYNCS), help="limit to one config")
