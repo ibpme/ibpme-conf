@@ -1,6 +1,6 @@
 {
   "sources": [
     {"source": "ibpme/ibpme-agents-lab", "skills": ["*"]},
-    {"source": "mattpocock/skills", "skills": ["tdd", "writing-for-agents", "codebase-design"]}
+    {"source": "mattpocock/skills", "skills": ["*"]}
   ]
 }
