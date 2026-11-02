@@ -41,9 +41,11 @@ if [ -n "$used_pct" ]; then
   if [ "$used_int" -ge 90 ]; then color="\033[31m"; elif [ "$used_int" -ge 70 ]; then color="\033[33m"; else color="\033[32m"; fi
   bar=""
   i=0
-  while [ $i -lt $filled ]; do bar="${bar}█"; i=$((i+1)); done
+  while [ $i -lt $filled ]; do bar="${bar}━"; i=$((i+1)); done
+  # Real escape bytes: the bar is passed to printf as a %s argument, which is not escape-interpreted.
+  [ $empty -gt 0 ] && bar="${bar}$(printf '\033[90m')"
   i=0
-  while [ $i -lt $empty ]; do bar="${bar}░"; i=$((i+1)); done
+  while [ $i -lt $empty ]; do bar="${bar}─"; i=$((i+1)); done
   total_input=$(echo "$input" | jq -r '.context_window.total_input_tokens // 0')
   ctx_size=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
   total_in_k=$(( total_input / 1000 ))
@@ -145,7 +147,7 @@ if [ -n "$used_pct" ]; then
     think_seg=$(printf "\033[38;5;141m󱍞 %s %s\033[0m" "${think_turn:-—}" "$think_session")
     breakdown="${breakdown}${dot}${think_seg}"
   fi
-  left="${left}$(printf " \033[90m|\033[0m ${color}%s %d%%\033[0m %dk/%s %s" "$bar" "$used_int" "$total_in_k" "$ctx_size_str" "$breakdown")"
+  left="${left}$(printf " \033[90m|\033[0m ${color}%s\033[0m ${color}%d%%\033[0m %dk/%s %s" "$bar" "$used_int" "$total_in_k" "$ctx_size_str" "$breakdown")"
 fi
 
 model=$(echo "$input" | jq -r '.model.display_name // empty')
